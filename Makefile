@@ -22,6 +22,7 @@ SIZE     := $(CROSS)size
 # 目标文件规则是用 $(eval) 生成的，会先于下面的 all 出现；
 # 显式指定默认目标，保证直接执行 make 就是构建全部。
 .DEFAULT_GOAL := all
+.DELETE_ON_ERROR:
 
 # ------------------------------------------------- portable shell helpers ---
 ifeq ($(OS),Windows_NT)
@@ -36,6 +37,7 @@ endif
 CPUFLAGS := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
 OPT      ?= -O2
 WARN     := -Wall -Wextra
+DEPFLAGS := -MMD -MP
 CFLAGS   := $(CPUFLAGS) $(OPT) -std=gnu11 $(WARN) -g3 \
             -ffunction-sections -fdata-sections -fno-strict-aliasing
 LDFLAGS  := $(CPUFLAGS) $(OPT) -Wl,--gc-sections
@@ -154,6 +156,7 @@ APP_OBJ   := $(addprefix $(APP_ODIR)/,$(notdir $(APP_SRC:.c=.o))) \
              $(addprefix $(APP_ODIR)/,$(notdir $(APP_ASM:.s=.o)))
 BOOT_OBJ  := $(addprefix $(BOOT_ODIR)/,$(notdir $(BOOT_SRC:.c=.o))) \
              $(addprefix $(BOOT_ODIR)/,$(notdir $(BOOT_ASM:.s=.o)))
+DEPS      := $(APP_OBJ:.o=.d) $(BOOT_OBJ:.o=.d)
 
 APP_ELF   := $(BDIR)/$(APP_NAME).elf
 BOOT_ELF  := $(BDIR)/$(BOOT_NAME).elf
@@ -162,12 +165,12 @@ BOOT_ELF  := $(BDIR)/$(BOOT_NAME).elf
 # Explicit rules (instead of a pattern rule) so objects stay in a flat
 # directory and no per-file mkdir is needed on Windows.
 define APP_C_RULE
-$(APP_ODIR)/$(notdir $(1:.c=.o)): $(1) | $(APP_ODIR)
-	$(CC) -c $(CFLAGS) $(APP_DEFS) $(addprefix -I,$(APP_INC)) $$< -o $$@
+$(APP_ODIR)/$(notdir $(1:.c=.o)): $(1) Makefile | $(APP_ODIR)
+	$(CC) -c $(CFLAGS) $(DEPFLAGS) $(APP_DEFS) $(addprefix -I,$(APP_INC)) $$< -o $$@
 endef
 define BOOT_C_RULE
-$(BOOT_ODIR)/$(notdir $(1:.c=.o)): $(1) | $(BOOT_ODIR)
-	$(CC) -c $(CFLAGS) $(BOOT_DEFS) $(addprefix -I,$(BOOT_INC)) $$< -o $$@
+$(BOOT_ODIR)/$(notdir $(1:.c=.o)): $(1) Makefile | $(BOOT_ODIR)
+	$(CC) -c $(CFLAGS) $(DEPFLAGS) $(BOOT_DEFS) $(addprefix -I,$(BOOT_INC)) $$< -o $$@
 endef
 $(foreach s,$(APP_SRC),$(eval $(call APP_C_RULE,$(s))))
 $(foreach s,$(BOOT_SRC),$(eval $(call BOOT_C_RULE,$(s))))
@@ -183,22 +186,24 @@ boot: $(BOOT_ELF) $(BOOT_ELF:.elf=.hex) $(BOOT_ELF:.elf=.bin)
 hex: $(APP_ELF:.elf=.hex) $(BOOT_ELF:.elf=.hex)
 bin: $(APP_ELF:.elf=.bin) $(BOOT_ELF:.elf=.bin)
 
+$(APP_ODIR) $(BOOT_ODIR): | $(BDIR)
+
 $(APP_ODIR) $(BOOT_ODIR) $(BDIR):
 	@$(call MKDIR,$@)
 
-$(APP_ELF): $(APP_OBJ) $(APP_LD) | $(BDIR)
+$(APP_ELF): $(APP_OBJ) $(APP_LD) Makefile | $(BDIR)
 	$(CC) $(APP_OBJ) $(LDFLAGS) -T$(APP_LD) -Wl,-Map=$(@:.elf=.map) \
 		-Wl,--print-memory-usage $(APP_LDLIBS) -o $@
 
-$(BOOT_ELF): $(BOOT_OBJ) $(BOOT_LD) | $(BDIR)
+$(BOOT_ELF): $(BOOT_OBJ) $(BOOT_LD) Makefile | $(BDIR)
 	$(CC) $(BOOT_OBJ) $(LDFLAGS) -T$(BOOT_LD) -Wl,-Map=$(@:.elf=.map) \
 		-Wl,--print-memory-usage $(LDLIBS) -o $@
 
-$(APP_ODIR)/$(notdir $(APP_ASM:.s=.o)): $(APP_ASM) | $(APP_ODIR)
-	$(CC) -c $(CPUFLAGS) -x assembler-with-cpp $< -o $@
+$(APP_ODIR)/$(notdir $(APP_ASM:.s=.o)): $(APP_ASM) Makefile | $(APP_ODIR)
+	$(CC) -c $(CPUFLAGS) $(DEPFLAGS) -x assembler-with-cpp $< -o $@
 
-$(BOOT_ODIR)/$(notdir $(BOOT_ASM:.s=.o)): $(BOOT_ASM) | $(BOOT_ODIR)
-	$(CC) -c $(CPUFLAGS) -x assembler-with-cpp $< -o $@
+$(BOOT_ODIR)/$(notdir $(BOOT_ASM:.s=.o)): $(BOOT_ASM) Makefile | $(BOOT_ODIR)
+	$(CC) -c $(CPUFLAGS) $(DEPFLAGS) -x assembler-with-cpp $< -o $@
 
 %.hex: %.elf
 	$(OBJCOPY) -O ihex $< $@
@@ -219,3 +224,5 @@ help:
 	@echo "make [all|app|boot|hex|bin|size|clean]"
 	@echo "  CROSS=<prefix>   toolchain prefix (default arm-none-eabi-)"
 	@echo "  OPT=<flags>      optimisation flags (default -O2)"
+
+-include $(DEPS)
